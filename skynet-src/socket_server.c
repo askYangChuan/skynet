@@ -60,10 +60,10 @@
 
 struct write_buffer {
 	struct write_buffer * next;
-	void *buffer;
-	char *ptr;
-	int sz;
-	bool userobject;
+	void *buffer;			//当前这个buffer的头位置
+	char *ptr;				//当前发送的位置
+	int sz;					//还剩下发送的数据
+	bool userobject;		//为1表示是用户的数据，需要调用专门的函数解析为原始数据，为0表示为原始数据
 	uint8_t udp_address[UDP_ADDRESS_SIZE];
 };
 
@@ -76,31 +76,31 @@ struct wb_list {
 };
 
 struct socket {
-	uintptr_t opaque;
+	uintptr_t opaque;		/* 绑定的ctx的handle */
 	struct wb_list high;
 	struct wb_list low;
-	int64_t wb_size;
-	volatile uint32_t sending;
+	int64_t wb_size;		/* 需要发送的实时数据长度，发送前增加，发送后减去 */
+	volatile uint32_t sending;	/* 分配的id是否大于65536, ID_TAG16(id) << 16 | 0 */
 	int fd;
-	int id;
+	int id;		/* 在SERVER_SOCKET里面socket 里面的索引, struct socket */
 	uint8_t protocol;
-	uint8_t type;
+	uint8_t type;		/* SOCKET_TYPE_INVALID */
 	uint16_t udpconnecting;
-	int64_t warn_size;
+	int64_t warn_size;		/* 警告长度，超过这个长度会发出警告,SOCKET_WARNING */
 	union {
-		int size;
+		int size;		/* MIN_READ_BUFFER 64 */
 		uint8_t udp_address[UDP_ADDRESS_SIZE];
 	} p;
 	struct spinlock dw_lock;
-	int dw_offset;
-	const void * dw_buffer;
-	size_t dw_size;
+	int dw_offset;				/* 已经发送的数据的偏移量 */
+	const void * dw_buffer;		/* 其他线程直接发送的报文，结果没发送完全，所以在socket线程发送时要优先发送该数据 */
+	size_t dw_size;				/* dw_size小于0说明这个是一个用户维护的对象，需要调用对应的函数解析为原始数据发送 */
 };
 
 struct socket_server {
-	int recvctrl_fd;
+	int recvctrl_fd;	/* 2个管道fd */
 	int sendctrl_fd;
-	int checkctrl;
+	int checkctrl;		/* default 1 */
 	poll_fd event_fd;
 	int alloc_id;
 	int event_n;
@@ -156,8 +156,8 @@ struct request_bind {
 };
 
 struct request_start {
-	int id;
-	uintptr_t opaque;
+	int id;					/* socket的索引id */
+	uintptr_t opaque;		/* ctx的handle */
 };
 
 struct request_setopt {
@@ -490,7 +490,7 @@ open_socket(struct socket_server *ss, struct request_open * request, struct sock
 	ai_hints.ai_socktype = SOCK_STREAM;
 	ai_hints.ai_protocol = IPPROTO_TCP;
 
-	status = getaddrinfo( request->host, port, &ai_hints, &ai_list );
+	status = getaddrinfo( request->host, port, &ai_hints, &ai_list );	//用于获取对端的ip地址和协议，只要有一个connect了，就OK了
 	if ( status != 0 ) {
 		result->data = (void *)gai_strerror(status);
 		goto _failed;
@@ -655,6 +655,7 @@ list_uncomplete(struct wb_list *s) {
 	return (void *)wb->ptr != wb->buffer;
 }
 
+/* 将low的head这个未发送完全的节点移动到head上面 */
 static void
 raise_uncomplete(struct socket * s) {
 	struct wb_list *low = &s->low;
@@ -710,7 +711,7 @@ send_buffer_(struct socket_server *ss, struct socket *s, struct socket_lock *l, 
 		assert(send_buffer_empty(s) && s->wb_size == 0);
 		sp_write(ss->event_fd, s->fd, s, false);			
 
-		if (s->type == SOCKET_TYPE_HALFCLOSE) {
+		if (s->type == SOCKET_TYPE_HALFCLOSE) {	/* TCP的设备最好在发送完全后才关闭socket，这样避免对端漏收数据 */
 				force_close(ss, s, l, result);
 				return SOCKET_CLOSE;
 		}
@@ -731,7 +732,7 @@ static int
 send_buffer(struct socket_server *ss, struct socket *s, struct socket_lock *l, struct socket_message *result) {
 	if (!socket_trylock(l))
 		return -1;	// blocked by direct write, send later.
-	if (s->dw_buffer) {
+	if (s->dw_buffer) {		//先发送直接发送未发送完成的数据,将数据弄到head的头部
 		// add direct write buffer before high.head
 		struct write_buffer * buf = MALLOC(SIZEOF_TCPBUFFER);
 		struct send_object so;
@@ -744,7 +745,7 @@ send_buffer(struct socket_server *ss, struct socket *s, struct socket_lock *l, s
 			s->high.head = s->high.tail = buf;
 			buf->next = NULL;
 		} else {
-			buf->next = s->high.head;
+			buf->next = s->high.head;		//直接发送的数据的优先级最高，要先弄去发送了
 			s->high.head = buf;
 		}
 		s->dw_buffer = NULL;
@@ -951,7 +952,7 @@ start_socket(struct socket_server *ss, struct request_start *request, struct soc
 	}
 	struct socket_lock l;
 	socket_lock_init(s, &l);
-	if (s->type == SOCKET_TYPE_PACCEPT || s->type == SOCKET_TYPE_PLISTEN) {
+	if (s->type == SOCKET_TYPE_PACCEPT || s->type == SOCKET_TYPE_PLISTEN) {	/* 如果是已经准备就绪的socket就加入到epoll */
 		if (sp_add(ss->event_fd, s->fd, s)) {
 			force_close(ss, s, &l, result);
 			result->data = strerror(errno);
@@ -1103,15 +1104,15 @@ ctrl_cmd(struct socket_server *ss, struct socket_message *result) {
 	// ctrl command only exist in local fd, so don't worry about endian.
 	switch (type) {
 	case 'S':
-		return start_socket(ss,(struct request_start *)buffer, result);
+		return start_socket(ss,(struct request_start *)buffer, result);	  /* 让socket 开始工作，修改socket的状态 */
 	case 'B':
-		return bind_socket(ss,(struct request_bind *)buffer, result);
+		return bind_socket(ss,(struct request_bind *)buffer, result);	  /* 只是让socket的状态设置为bind */
 	case 'L':
-		return listen_socket(ss,(struct request_listen *)buffer, result);
+		return listen_socket(ss,(struct request_listen *)buffer, result);	/* 只是让socket的状态设置为listen,并且不应答 */
 	case 'K':
-		return close_socket(ss,(struct request_close *)buffer, result);
+		return close_socket(ss,(struct request_close *)buffer, result);		/* 关闭socket */
 	case 'O':
-		return open_socket(ss, (struct request_open *)buffer, result);
+		return open_socket(ss, (struct request_open *)buffer, result);		/* 创建socket并连接指定ip端口 */
 	case 'X':
 		result->opaque = 0;
 		result->id = 0;
@@ -1122,21 +1123,21 @@ ctrl_cmd(struct socket_server *ss, struct socket_message *result) {
 	case 'P': {
 		int priority = (type == 'D') ? PRIORITY_HIGH : PRIORITY_LOW;
 		struct request_send * request = (struct request_send *) buffer;
-		int ret = send_socket(ss, request, result, priority, NULL);
+		int ret = send_socket(ss, request, result, priority, NULL);	/* 根据优先级加入到高低队列里面，开始epollout */
 		dec_sending_ref(ss, request->id);
 		return ret;
 	}
-	case 'A': {
+	case 'A': { /* 指定了向哪个地址发送数据，并弄到高优先级队列 */
 		struct request_send_udp * rsu = (struct request_send_udp *)buffer;
 		return send_socket(ss, &rsu->send, result, PRIORITY_HIGH, rsu->address);
 	}
 	case 'C':
-		return set_udp_address(ss, (struct request_setudp *)buffer, result);
+		return set_udp_address(ss, (struct request_setudp *)buffer, result);	/* 设置udp目的地址 */
 	case 'T':
-		setopt_socket(ss, (struct request_setopt *)buffer);
+		setopt_socket(ss, (struct request_setopt *)buffer);	/* 设置tcp socketopt */
 		return -1;
 	case 'U':
-		add_udp_socket(ss, (struct request_udp *)buffer);
+		add_udp_socket(ss, (struct request_udp *)buffer);	/* 设置一个udp socket */
 		return -1;
 	default:
 		fprintf(stderr, "socket-server: Unknown ctrl %c.\n",type);
@@ -1542,7 +1543,7 @@ socket_server_send(struct socket_server *ss, int id, const void * buffer, int sz
 				return 0;
 			}
 			// write failed, put buffer into s->dw_* , and let socket thread send it. see send_buffer()
-			s->dw_buffer = buffer;
+			s->dw_buffer = buffer;		/* 直接发送的数据没发完全，需要设置EPOLLOUT来发送 */
 			s->dw_size = sz;
 			s->dw_offset = n;
 
@@ -1561,7 +1562,7 @@ socket_server_send(struct socket_server *ss, int id, const void * buffer, int sz
 	request.u.send.sz = sz;
 	request.u.send.buffer = (char *)buffer;
 
-	send_request(ss, &request, 'D', sizeof(request.u.send));
+	send_request(ss, &request, 'D', sizeof(request.u.send));	/* 走到这里是队列有数据，所以需要通知socket线程处理 */
 	return 0;
 }
 
@@ -1680,7 +1681,7 @@ socket_server_listen(struct socket_server *ss, uintptr_t opaque, const char * ad
 		return -1;
 	}
 	struct request_package request;
-	int id = reserve_id(ss);
+	int id = reserve_id(ss);	/* 这个函数其实使用了无锁编程的概念，在这里分配一个id，然后让那边独立的线程无锁操作，这样做的原因是需要快速分配id */
 	if (id < 0) {
 		close(fd);
 		return id;

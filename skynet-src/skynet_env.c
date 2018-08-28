@@ -13,7 +13,7 @@ struct skynet_env {
 	lua_State *L;
 };
 
-static struct skynet_env *E = NULL;
+static struct skynet_env *E = NULL;		/* 专门用来存储环境变量的虚拟机 */
 
 const char * 
 skynet_getenv(const char *key) {
@@ -36,7 +36,7 @@ skynet_setenv(const char *key, const char *value) {
 	
 	lua_State *L = E->L;
 	lua_getglobal(L, key);
-	assert(lua_isnil(L, -1));
+	assert(lua_isnil(L, -1));		/* 将全局变量key入栈过后判断是否为nil */
 	lua_pop(L,1);
 	lua_pushstring(L,value);
 	lua_setglobal(L,key);

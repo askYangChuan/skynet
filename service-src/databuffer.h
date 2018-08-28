@@ -14,9 +14,9 @@ struct message {
 };
 
 struct databuffer {
-	int header;
-	int offset;
-	int size;
+	int header;		/* 当前协议的头部数据, 2 or 4 bytes */
+	int offset;		/* 读取的head这个节点的当前偏移量 */
+	int size;		/* 当前读取到了但还没有解析的数据长度 */
 	struct message * head;
 	struct message * tail;
 };
@@ -67,18 +67,18 @@ databuffer_read(struct databuffer *db, struct messagepool *mp, void * buffer, in
 	db->size -= sz;
 	for (;;) {
 		struct message *current = db->head;
-		int bsz = current->size - db->offset;
-		if (bsz > sz) {
+		int bsz = current->size - db->offset;	/* 当前头结点读取的偏移量 */
+		if (bsz > sz) {		/* 当前节点比要读取的数据还多，记录下偏移量 */
 			memcpy(buffer, current->buffer + db->offset, sz);
 			db->offset += sz;
 			return;
 		}
-		if (bsz == sz) {
+		if (bsz == sz) {	/* 长度一致，直接退出 */
 			memcpy(buffer, current->buffer + db->offset, sz);
 			db->offset = 0;
 			_return_message(db, mp);
 			return;
-		} else {
+		} else {	/* 长度还不足，需要再读下一个节点，清空偏移量 */
 			memcpy(buffer, current->buffer + db->offset, bsz);
 			_return_message(db, mp);
 			db->offset = 0;
@@ -88,13 +88,14 @@ databuffer_read(struct databuffer *db, struct messagepool *mp, void * buffer, in
 	}
 }
 
+/* 将消息挂在到对应的connection的消息队列里面 */
 static void
 databuffer_push(struct databuffer *db, struct messagepool *mp, void *data, int sz) {
 	struct message * m;
 	if (mp->freelist) {
 		m = mp->freelist;
 		mp->freelist = m->next;
-	} else {
+	} else {	/* gateway的消息池堆满了，再创建一个消息池并加入到mp的链表 */
 		struct messagepool_list * mpl = skynet_malloc(sizeof(*mpl));
 		struct message * temp = mpl->pool;
 		int i;
@@ -107,7 +108,7 @@ databuffer_push(struct databuffer *db, struct messagepool *mp, void *data, int s
 		mpl->next = mp->pool;
 		mp->pool = mpl;
 		m = &temp[0];
-		mp->freelist = &temp[1];
+		mp->freelist = &temp[1];		/* 都是取一个freelist来用 */
 	}
 	m->buffer = data;
 	m->size = sz;
@@ -126,7 +127,7 @@ static int
 databuffer_readheader(struct databuffer *db, struct messagepool *mp, int header_size) {
 	if (db->header == 0) {
 		// parser header (2 or 4)
-		if (db->size < header_size) {
+		if (db->size < header_size) {	/* 判断是否收到一个完整的报文头部，实际上协议前面几个字节就是报文长度 */
 			return -1;
 		}
 		uint8_t plen[4];

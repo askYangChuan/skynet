@@ -30,6 +30,7 @@ skynet_socket_free() {
 }
 
 // mainloop thread
+//将socket收到的数据转发给对应的ctx队列
 static void
 forward_message(int type, bool padding, struct socket_message * result) {
 	struct skynet_socket_message *sm;
@@ -108,7 +109,7 @@ skynet_socket_poll() {
 	if (more) {
 		return -1;
 	}
-	return 1;
+	return 1;		/* 唤醒工作线程来处理队列 */
 }
 
 int

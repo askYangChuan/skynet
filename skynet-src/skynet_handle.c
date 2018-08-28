@@ -20,19 +20,19 @@ struct handle_storage {
 	struct rwlock lock;
 
 	uint32_t harbor;
-	uint32_t handle_index;
-	int slot_size;
+	uint32_t handle_index;	/* 1 */
+	int slot_size;		/* DEFAULT_SLOT_SIZE 4 */
 	struct skynet_context ** slot;
 	
-	int name_cap;
-	int name_count;
-	struct handle_name *name;
+	int name_cap;		/* default 2,用于计算name的长度 */
+	int name_count;		/* 0，当前有几个name服务，按照字符串排序 */
+	struct handle_name *name;		/* name_cap 2, 寻找方式：折半查找 */
 };
 
-static struct handle_storage *H = NULL;
+static struct handle_storage *H = NULL;		/* 统一管理skynet_context（handle)的变量，同时提供具名服务查找功能(name->handle) */
 
 uint32_t
-skynet_handle_register(struct skynet_context *ctx) {
+skynet_handle_register(struct skynet_context *ctx) {	/* 总之一个算法获取一个独有的handle并存入s中 */
 	struct handle_storage *s = H;
 
 	rwlock_wlock(&s->lock);
@@ -66,8 +66,10 @@ skynet_handle_register(struct skynet_context *ctx) {
 	}
 }
 
+/* 将context从s->slot删除，也从name里面删除，并删除一个引用,这个函数用于删除context在其他地方的存储，本身没删除，
+学习下：删除外在的索引，减少引用计数，其他引用的ctx只需要删除减少引用计数就可以了，真正删除函数，并没有删除外在的索引 */
 int
-skynet_handle_retire(uint32_t handle) {
+skynet_handle_retire(uint32_t handle) {	
 	int ret = 0;
 	struct handle_storage *s = H;
 
@@ -81,7 +83,7 @@ skynet_handle_retire(uint32_t handle) {
 		ret = 1;
 		int i;
 		int j=0, n=s->name_count;
-		for (i=0; i<n; ++i) {
+		for (i=0; i<n; ++i) {	/* 算法不错，遍历一遍将需要删除的节点用后面的节点覆盖 */
 			if (s->name[i].handle == handle) {
 				skynet_free(s->name[i].name);
 				continue;
@@ -130,7 +132,7 @@ skynet_handle_retireall() {
 }
 
 struct skynet_context * 
-skynet_handle_grab(uint32_t handle) {
+skynet_handle_grab(uint32_t handle) {		/* 通过handle查找服务，会增加引用计数 */
 	struct handle_storage *s = H;
 	struct skynet_context * result = NULL;
 
@@ -149,7 +151,7 @@ skynet_handle_grab(uint32_t handle) {
 }
 
 uint32_t 
-skynet_handle_findname(const char * name) {
+skynet_handle_findname(const char * name) {	/* 通过name查找handle */
 	struct handle_storage *s = H;
 
 	rwlock_rlock(&s->lock);
@@ -229,7 +231,7 @@ _insert_name(struct handle_storage *s, const char * name, uint32_t handle) {
 }
 
 const char * 
-skynet_handle_namehandle(uint32_t handle, const char *name) {
+skynet_handle_namehandle(uint32_t handle, const char *name) {	/* 注册name服务 */
 	rwlock_wlock(&H->lock);
 
 	const char * ret = _insert_name(H, name, handle);

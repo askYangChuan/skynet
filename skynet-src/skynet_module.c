@@ -19,10 +19,10 @@ struct modules {
 	struct skynet_module m[MAX_MODULE_TYPE];
 };
 
-static struct modules * M = NULL;
+static struct modules * M = NULL;	/* c库的寻找路径, 参数cpath = "cservice/?.so" */
 
 static void *
-_try_open(struct modules *m, const char * name) {
+_try_open(struct modules *m, const char * name) {	/* 打开一个动态库.so */
 	const char *l;
 	const char * path = m->path;
 	size_t path_size = strlen(path);

@@ -9,7 +9,7 @@ typedef void (*skynet_dl_release)(void * inst);
 typedef void (*skynet_dl_signal)(void * inst, int signal);
 
 struct skynet_module {
-	const char * name;
+	const char * name;		/* 模块名，logservice */
 	void * module;
 	skynet_dl_create create;
 	skynet_dl_init init;

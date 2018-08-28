@@ -22,11 +22,11 @@
 typedef void (*timer_execute_func)(void *ud,void *arg);
 
 #define TIME_NEAR_SHIFT 8
-#define TIME_NEAR (1 << TIME_NEAR_SHIFT)
+#define TIME_NEAR (1 << TIME_NEAR_SHIFT)		/*256*/
 #define TIME_LEVEL_SHIFT 6
-#define TIME_LEVEL (1 << TIME_LEVEL_SHIFT)
-#define TIME_NEAR_MASK (TIME_NEAR-1)
-#define TIME_LEVEL_MASK (TIME_LEVEL-1)
+#define TIME_LEVEL (1 << TIME_LEVEL_SHIFT)		/*64*/
+#define TIME_NEAR_MASK (TIME_NEAR-1)			/*255, 0xff*/
+#define TIME_LEVEL_MASK (TIME_LEVEL-1)			/*63, 11 1111*/
 
 struct timer_event {
 	uint32_t handle;
@@ -37,6 +37,7 @@ struct timer_node {
 	struct timer_node *next;
 	uint32_t expire;
 };
+/* timer_node 内存下面还有一个 strcut timer_event */
 
 struct link_list {
 	struct timer_node head;
@@ -44,13 +45,13 @@ struct link_list {
 };
 
 struct timer {
-	struct link_list near[TIME_NEAR];
-	struct link_list t[4][TIME_LEVEL];
+	struct link_list near[TIME_NEAR];	/* 256 */
+	struct link_list t[4][TIME_LEVEL];	/* 64 */
 	struct spinlock lock;
 	uint32_t time;
-	uint32_t starttime;
-	uint64_t current;
-	uint64_t current_point;
+	uint32_t starttime;	/* 程序启动时间，秒数 */
+	uint64_t current;	/* 程序启动时间的小数部分，单位：0.01秒 */
+	uint64_t current_point;	/* 程序启动时间，单位：秒*100 + 0.0x秒 */
 };
 
 static struct timer * TI = NULL;
@@ -76,19 +77,19 @@ add_node(struct timer *T,struct timer_node *node) {
 	uint32_t time=node->expire;
 	uint32_t current_time=T->time;
 	
-	if ((time|TIME_NEAR_MASK)==(current_time|TIME_NEAR_MASK)) {
+	if ((time|TIME_NEAR_MASK)==(current_time|TIME_NEAR_MASK)) {	/* 同一个时间slot，不超过当前最大256 */
 		link(&T->near[time&TIME_NEAR_MASK],node);
 	} else {
 		int i;
 		uint32_t mask=TIME_NEAR << TIME_LEVEL_SHIFT;
-		for (i=0;i<3;i++) {
+		for (i=0;i<3;i++) {	/* 循环完后，i=3 */
 			if ((time|(mask-1))==(current_time|(mask-1))) {
 				break;
 			}
 			mask <<= TIME_LEVEL_SHIFT;
 		}
 
-		link(&T->t[i][((time>>(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT)) & TIME_LEVEL_MASK)],node);	
+		link(&T->t[i][((time>>(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT)) & TIME_LEVEL_MASK)],node);	/* 将time右移到指定位置处，找到slot的pos点 */
 	}
 }
 
@@ -116,19 +117,19 @@ move_list(struct timer *T, int level, int idx) {
 }
 
 static void
-timer_shift(struct timer *T) {
+timer_shift(struct timer *T) {	/* 处理时间轮+1，转换到下一个槽 */
 	int mask = TIME_NEAR;
-	uint32_t ct = ++T->time;
+	uint32_t ct = ++T->time;	/* 本时间轮的槽是6/6/6/6/8，其中最底层的槽是8个bit，是256个，其余级别的槽是6bit，共64个 */
 	if (ct == 0) {
 		move_list(T, 3, 0);
 	} else {
-		uint32_t time = ct >> TIME_NEAR_SHIFT;
+		uint32_t time = ct >> TIME_NEAR_SHIFT;	/* 得到当前第二级别的槽，第4个6 */
 		int i=0;
 
-		while ((ct & (mask-1))==0) {
+		while ((ct & (mask-1))==0) {	/* 判断当前槽的指针(第一次是判断8bit槽)是否到了0,为0则表示需要将更高级别的槽的数据给弄到低级别去 */
 			int idx=time & TIME_LEVEL_MASK;
-			if (idx!=0) {
-				move_list(T, i, idx);
+			if (idx!=0) {	/* 高级别的槽不是0，可以移动到低级别去 */
+				move_list(T, i, idx);	/* 这里是用add_node来添加，所以就保证更高级别的数据也弄到属于他的位置去 */
 				break;				
 			}
 			mask <<= TIME_LEVEL_SHIFT;
@@ -157,7 +158,7 @@ dispatch_list(struct timer_node *current) {
 }
 
 static inline void
-timer_execute(struct timer *T) {
+timer_execute(struct timer *T) {		/* 将当前这个槽slot的数据都发出去，相当于执行 */
 	int idx = T->time & TIME_NEAR_MASK;
 	
 	while (T->near[idx].head.next) {

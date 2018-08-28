@@ -21,13 +21,13 @@
 struct message_queue {
 	struct spinlock lock;
 	uint32_t handle;
-	int cap;
+	int cap;		/* DEFAULT_QUEUE_SIZE 64 */
 	int head;
 	int tail;
 	int release;
-	int in_global;
+	int in_global;	/* MQ_IN_GLOBAL 1 ，当工作线程取到是空队列的时候就设置为0，并且不加入总队列，等ctx自己push的时候再设置好加入总队列，初始化时空队列也会加入总队列 */
 	int overload;
-	int overload_threshold;
+	int overload_threshold;	/* MQ_OVERLOAD 1024 */
 	struct skynet_message *queue;
 	struct message_queue *next;
 };
@@ -38,10 +38,10 @@ struct global_queue {
 	struct spinlock lock;
 };
 
-static struct global_queue *Q = NULL;
+static struct global_queue *Q = NULL;	/* 总消息队列 */
 
 void 
-skynet_globalmq_push(struct message_queue * queue) {
+skynet_globalmq_push(struct message_queue * queue) {	/* 将队列加入总队列 */
 	struct global_queue *q= Q;
 
 	SPIN_LOCK(q)
@@ -56,7 +56,7 @@ skynet_globalmq_push(struct message_queue * queue) {
 }
 
 struct message_queue * 
-skynet_globalmq_pop() {
+skynet_globalmq_pop() {	//从总队列取出一个节点
 	struct global_queue *q = Q;
 
 	SPIN_LOCK(q)
@@ -135,7 +135,7 @@ skynet_mq_overload(struct message_queue *q) {
 }
 
 int
-skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {
+skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {	/* 从队列取数据,不从队列删除，只是循环利用，通过结构体赋值 */
 	int ret = 1;
 	SPIN_LOCK(q)
 
@@ -187,9 +187,9 @@ expand_queue(struct message_queue *q) {
 }
 
 void 
-skynet_mq_push(struct message_queue *q, struct skynet_message *message) {
+skynet_mq_push(struct message_queue *q, struct skynet_message *message) {	/* 将数据加入队列 */
 	assert(message);
-	SPIN_LOCK(q)
+	SPIN_LOCK(q)	/* 这个锁保证同一时间只有一个线程在操作这个queue，不然那后面这个queue可能会被重复添加到global队列 */
 
 	q->queue[q->tail] = *message;
 	if (++ q->tail >= q->cap) {
@@ -200,7 +200,7 @@ skynet_mq_push(struct message_queue *q, struct skynet_message *message) {
 		expand_queue(q);
 	}
 
-	if (q->in_global == 0) {
+	if (q->in_global == 0) {	/* 没在队列里面，就直接给弄进总队列了 */
 		q->in_global = MQ_IN_GLOBAL;
 		skynet_globalmq_push(q);
 	}
@@ -217,7 +217,7 @@ skynet_mq_init() {
 }
 
 void 
-skynet_mq_mark_release(struct message_queue *q) {
+skynet_mq_mark_release(struct message_queue *q) {	/* 给队列打个release = 1的标记，并弄到总队列里面， 好删除 */
 	SPIN_LOCK(q)
 	assert(q->release == 0);
 	q->release = 1;

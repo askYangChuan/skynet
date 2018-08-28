@@ -237,7 +237,7 @@ function socket.close(id)
 			-- wait reading coroutine read the buffer.
 			assert(not s.closing)
 			s.closing = coroutine.running()
-			skynet.wait(s.closing)
+			skynet.wait(s.closing)      --这里先等待driver.close的响应再继续
 		else
 			suspend(s)
 		end
@@ -248,7 +248,7 @@ function socket.close(id)
 	socket_pool[id] = nil
 end
 
-function socket.read(id, sz)
+function socket.read(id, sz)        --该函数是阻塞函数，一定会等到数据才返回(除非断开连接)
 	local s = socket_pool[id]
 	assert(s)
 	if sz == nil then
@@ -272,7 +272,7 @@ function socket.read(id, sz)
 		end
 	end
 
-	local ret = driver.pop(s.buffer, buffer_pool, sz)
+	local ret = driver.pop(s.buffer, buffer_pool, sz)   /* 从s.buffer里面获取数据,如果数据不够就直接返回nil */
 	if ret then
 		return ret
 	end

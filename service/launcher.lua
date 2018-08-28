@@ -3,9 +3,9 @@ local core = require "skynet.core"
 require "skynet.manager"	-- import manager apis
 local string = string
 
-local services = {}
+local services = {}         --创建的handle为key，一个名字为value， 例如 "snlua cdummy"
 local command = {}
-local instance = {} -- for confirm (function command.LAUNCH / command.ERROR / command.LAUNCHOK)
+local instance = {} -- for confirm (function command.LAUNCH / command.ERROR / command.LAUNCHOK) handle为key, 应答函数response为value
 
 local function handle_to_address(handle)
 	return tonumber("0x" .. string.sub(handle , 2))
@@ -77,7 +77,7 @@ end
 local function launch_service(service, ...)
 	local param = table.concat({...}, " ")
 	local inst = skynet.launch(service, param)
-	local response = skynet.response()
+	local response = skynet.response()      --这个地方会调用coroutine_yield，让出cpu，实际上也只是去获取一个response函数，里面包装了应答的handle和session
 	if inst then
 		services[inst] = service .. " " .. param
 		instance[inst] = response
@@ -88,7 +88,7 @@ local function launch_service(service, ...)
 	return inst
 end
 
-function command.LAUNCH(_, service, ...)
+function command.LAUNCH(_, service, ...)            --一般传递到这儿的参数是(source, "snlua", name) service 就是snlua
 	launch_service(service, ...)
 	return NORET
 end
@@ -126,7 +126,7 @@ end
 
 -- for historical reasons, launcher support text command (for C service)
 
-skynet.register_protocol {
+skynet.register_protocol {              --lua的函数在调用时候参数可以不用加()的，所以这里就是给skynet.register_protocol 传递了一个class(本质还是table)
 	name = "text",
 	id = skynet.PTYPE_TEXT,
 	unpack = skynet.tostring,
@@ -141,7 +141,8 @@ skynet.register_protocol {
 	end,
 }
 
-skynet.dispatch("lua", function(session, address, cmd , ...)
+--session是请求方的request id，address是请求方的handle
+skynet.dispatch("lua", function(session, address, cmd , ...)            --lua 这个在skynet.lua里面已经注册了，这里是给他设置一个分配函数
 	cmd = string.upper(cmd)
 	local f = command[cmd]
 	if f then

@@ -4,12 +4,12 @@
 struct skynet_config {
 	int thread;
 	int harbor;
-	int profile;
+	int profile;				/* default 1，用来统计每个服务使用了多少 cpu 时间 */
 	const char * daemon;
-	const char * module_path;
-	const char * bootstrap;
+	const char * module_path;	/* c库路径, cpath ./cservice/?.so */
+	const char * bootstrap;		/* snlua bootstrap */
 	const char * logger;
-	const char * logservice;
+	const char * logservice;	/* "logservice", "logger" */
 };
 
 #define THREAD_WORKER 0

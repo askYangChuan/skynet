@@ -16,7 +16,7 @@ struct snlua {
 	struct skynet_context * ctx;
 	size_t mem;
 	size_t mem_report;
-	size_t mem_limit;
+	size_t mem_limit;		/* LUA_REGISTRYINDEX 的memlimit */
 };
 
 // LUA_CACHELIB may defined in patched lua for shared proto
@@ -39,8 +39,8 @@ codecache(lua_State *L) {
 		{ NULL, NULL },
 	};
 	luaL_newlib(L,l);
-	lua_getglobal(L, "loadfile");
-	lua_setfield(L, -2, "loadfile");
+	lua_getglobal(L, "loadfile");	/* 将全局变量loadfile的值入栈 */
+	lua_setfield(L, -2, "loadfile");	/* 设置新创建的这个表格的L['loadfile']与全局一致 */
 	return 1;
 }
 
@@ -76,14 +76,14 @@ static int
 init_cb(struct snlua *l, struct skynet_context *ctx, const char * args, size_t sz) {
 	lua_State *L = l->L;
 	l->ctx = ctx;
-	lua_gc(L, LUA_GCSTOP, 0);
+	lua_gc(L, LUA_GCSTOP, 0);	/* 停止垃圾搜集器,因为 Lua 中可能发生垃圾收集,所以不保证 lua_tolstring 返回的指针， 在对应的值从堆栈中移除后依然有效。 */
 	lua_pushboolean(L, 1);  /* signal for libraries to ignore env. vars. */
-	lua_setfield(L, LUA_REGISTRYINDEX, "LUA_NOENV");
+	lua_setfield(L, LUA_REGISTRYINDEX, "LUA_NOENV");	/* 给lua的预定义表LUA_REGISTRYINDEX添加键值对(值为当前栈顶对象) */
 	luaL_openlibs(L);
-	lua_pushlightuserdata(L, ctx);
+	lua_pushlightuserdata(L, ctx);	/* 将一个轻量用户数据压栈,在lua中这个数据就是一个数字(指针指向的地址)，只要数字比较相同就表示数据相同 */
 	lua_setfield(L, LUA_REGISTRYINDEX, "skynet_context");
 	luaL_requiref(L, "skynet.codecache", codecache , 0);
-	lua_pop(L,1);
+	lua_pop(L,1);	/* 将 skynet.codecache 的栈顶副本弹出,在luaL_requiref成功会残留一个副本在栈顶，需要弹出 */
 
 	const char *path = optstring(ctx, "lua_path","./lualib/?.lua;./lualib/?/init.lua");
 	lua_pushstring(L, path);
@@ -98,10 +98,10 @@ init_cb(struct snlua *l, struct skynet_context *ctx, const char * args, size_t s
 	lua_pushstring(L, preload);
 	lua_setglobal(L, "LUA_PRELOAD");
 
-	lua_pushcfunction(L, traceback);
+	lua_pushcfunction(L, traceback);	/* 将异常处理函数弄到栈1索引里面，等会pcall的时候用 */
 	assert(lua_gettop(L) == 1);
 
-	const char * loader = optstring(ctx, "lualoader", "./lualib/loader.lua");
+	const char * loader = optstring(ctx, "lualoader", "./lualib/loader.lua");	/*实际上是启动loader.lua这个脚本来启动程序 */
 
 	int r = luaL_loadfile(L,loader);
 	if (r != LUA_OK) {
@@ -110,13 +110,13 @@ init_cb(struct snlua *l, struct skynet_context *ctx, const char * args, size_t s
 		return 1;
 	}
 	lua_pushlstring(L, args, sz);
-	r = lua_pcall(L,1,0,1);
+	r = lua_pcall(L,1,0,1);		/* 第一个1表示传递了一个参数(lua里面看不到traceback函数了，只能看得到传递给他的函数当做栈的开始)，第二个0不需要返回值，第三个1表示错误处理函数在栈1索引的位置 */
 	if (r != LUA_OK) {
 		skynet_error(ctx, "lua loader error : %s", lua_tostring(L, -1));
 		report_launcher_error(ctx);
 		return 1;
 	}
-	lua_settop(L,0);
+	lua_settop(L,0);	/* 清空栈 */
 	if (lua_getfield(L, LUA_REGISTRYINDEX, "memlimit") == LUA_TNUMBER) {
 		size_t limit = lua_tointeger(L, -1);
 		l->mem_limit = limit;
@@ -133,10 +133,10 @@ init_cb(struct snlua *l, struct skynet_context *ctx, const char * args, size_t s
 
 static int
 launch_cb(struct skynet_context * context, void *ud, int type, int session, uint32_t source , const void * msg, size_t sz) {
-	assert(type == 0 && session == 0);
+	assert(type == 0 && session == 0);	/* 用于确定是否是snlua_init发送的报文 */
 	struct snlua *l = ud;
 	skynet_callback(context, NULL, NULL);
-	int err = init_cb(l, context, msg, sz);
+	int err = init_cb(l, context, msg, sz);		/* 感觉snlua.c这个只是一次性使用的，只会调用一个loader.lua就完成了 */
 	if (err) {
 		skynet_command(context, "EXIT", NULL);
 	}
@@ -153,7 +153,7 @@ snlua_init(struct snlua *l, struct skynet_context *ctx, const char * args) {
 	const char * self = skynet_command(ctx, "REG", NULL);
 	uint32_t handle_id = strtoul(self+1, NULL, 16);
 	// it must be first message
-	skynet_send(ctx, 0, handle_id, PTYPE_TAG_DONTCOPY,0, tmp, sz);
+	skynet_send(ctx, 0, handle_id, PTYPE_TAG_DONTCOPY,0, tmp, sz);	/* 给自己发送数据启动bootstrap服务，这里就相当于等下一轮再启动这个服务 */
 	return 0;
 }
 
@@ -183,7 +183,7 @@ snlua_create(void) {
 	memset(l,0,sizeof(*l));
 	l->mem_report = MEMORY_WARNING_REPORT;
 	l->mem_limit = 0;
-	l->L = lua_newstate(lalloc, l);
+	l->L = lua_newstate(lalloc, l);		/* 创建一个虚拟机，然后里面分配内存都是用lalloc来分配，并传递l作为参数 */
 	return l;
 }
 

@@ -306,10 +306,10 @@ pack_one(lua_State *L, struct write_block *b, int index, int depth) {
 		break;
 	case LUA_TNUMBER: {
 		if (lua_isinteger(L, index)) {
-			lua_Integer x = lua_tointeger(L,index);
+			lua_Integer x = lua_tointeger(L,index);	/* 转换为int */
 			wb_integer(b, x);
 		} else {
-			lua_Number n = lua_tonumber(L,index);
+			lua_Number n = lua_tonumber(L,index);	/* 转换为浮点数float */
 			wb_real(b,n);
 		}
 		break;

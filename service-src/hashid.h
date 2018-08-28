@@ -6,7 +6,7 @@
 #include <string.h>
 
 struct hashid_node {
-	int id;
+	int id;			/* 这个存储的是struct socket的索引id          */
 	struct hashid_node *next;
 };
 
@@ -14,7 +14,7 @@ struct hashid {
 	int hashmod;
 	int cap;
 	int count;
-	struct hashid_node *id;
+	struct hashid_node *id;		/* 分配一堆连续内存用于等会加入到hash表 */
 	struct hashid_node **hash;
 };
 
@@ -92,7 +92,7 @@ static int
 hashid_insert(struct hashid * hi, int id) {
 	struct hashid_node *c = NULL;
 	int i;
-	for (i=0;i<hi->cap;i++) {
+	for (i=0;i<hi->cap;i++) {	/* 选一个空位就可以了 */
 		int index = (i+id) % hi->cap;
 		if (hi->id[index].id == -1) {
 			c = &hi->id[index];
@@ -105,11 +105,11 @@ hashid_insert(struct hashid * hi, int id) {
 	assert(c->next == NULL);
 	int h = id & hi->hashmod;
 	if (hi->hash[h]) {
-		c->next = hi->hash[h];
+		c->next = hi->hash[h];	/* 加入到hash表 */
 	}
 	hi->hash[h] = c;
 	
-	return c - hi->id;
+	return c - hi->id;			/* 返回的是c结构体在数组里面的下标(便宜量) */
 }
 
 static inline int

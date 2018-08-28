@@ -2,7 +2,7 @@ local skynet = require "skynet"
 local c = require "skynet.core"
 
 function skynet.launch(...)
-	local addr = c.command("LAUNCH", table.concat({...}," "))
+	local addr = c.command("LAUNCH", table.concat({...}," "))       --返回的是一个字符串16进制形式的handle，如:01000003(实际handle为16777219)
 	if addr then
 		return tonumber("0x" .. string.sub(addr , 2))
 	end
@@ -43,7 +43,7 @@ function skynet.register(name)
 	end
 end
 
-function skynet.name(name, handle)
+function skynet.name(name, handle)              --注册的要区分是本地服务，即.launcher这种前缀为.的是本地服务，其他的为全局服务
 	if not globalname(name, handle) then
 		c.command("NAME", name .. " " .. skynet.address(handle))
 	end

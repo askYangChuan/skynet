@@ -24,9 +24,9 @@ struct gate {
 	struct skynet_context *ctx;
 	int listen_id;
 	uint32_t watchdog;
-	uint32_t broker;
+	uint32_t broker;		/* 代理服务的handle */
 	int client_tag;
-	int header_size;
+	int header_size;		/* 2 or 4, S or L */
 	int max_connection;
 	struct hashid hash;
 	struct connection *conn;
@@ -100,8 +100,8 @@ _ctrl(struct gate * g, const void * msg, int sz) {
 			break;
 		}
 	}
-	if (memcmp(command,"kick",i)==0) {
-		_parm(tmp, sz, i);
+	if (memcmp(command,"kick",i)==0) {	/* 关闭指定的socket */
+		_parm(tmp, sz, i);		/* 得到kick 后面的param，指定的socket的id */
 		int uid = strtol(command , NULL, 10);
 		int id = hashid_lookup(&g->hash, uid);
 		if (id>=0) {
@@ -109,7 +109,7 @@ _ctrl(struct gate * g, const void * msg, int sz) {
 		}
 		return;
 	}
-	if (memcmp(command,"forward",i)==0) {
+	if (memcmp(command,"forward",i)==0) {	/* 设置connection的转发 */
 		_parm(tmp, sz, i);
 		char * client = tmp;
 		char * idstr = strsep(&client, " ");
@@ -190,7 +190,7 @@ static void
 dispatch_message(struct gate *g, struct connection *c, int id, void * data, int sz) {
 	databuffer_push(&c->buffer,&g->mp, data, sz);
 	for (;;) {
-		int size = databuffer_readheader(&c->buffer, &g->mp, g->header_size);
+		int size = databuffer_readheader(&c->buffer, &g->mp, g->header_size);	/* 这个函数保证了头部和数据都读取完成了 */
 		if (size < 0) {
 			return;
 		} else if (size > 0) {
@@ -201,7 +201,7 @@ dispatch_message(struct gate *g, struct connection *c, int id, void * data, int 
 				skynet_error(ctx, "Recv socket message > 16M");
 				return;
 			} else {
-				_forward(g, c, size);
+				_forward(g, c, size);	/* 将本次数据转发到指定的handle去 */
 				databuffer_reset(&c->buffer);
 			}
 		}
@@ -254,7 +254,7 @@ dispatch_socket_message(struct gate *g, const struct skynet_socket_message * mes
 		if (hashid_full(&g->hash)) {
 			skynet_socket_close(ctx, message->ud);
 		} else {
-			struct connection *c = &g->conn[hashid_insert(&g->hash, message->ud)];
+			struct connection *c = &g->conn[hashid_insert(&g->hash, message->ud)];	/* 分配了一个conn用于新的fd */
 			if (sz >= sizeof(c->remote_name)) {
 				sz = sizeof(c->remote_name) - 1;
 			}

@@ -109,9 +109,8 @@ end
 
 skynet.start(function()
 	local master_addr = skynet.getenv "standalone"
-	skynet.error("master listen socket " .. tostring(master_addr))
 	local fd = socket.listen(master_addr)
-	socket.start(fd , function(id, addr)
+	socket.start(fd , function(id, addr)                        --cmaster运行的这个程序会sleep，等待底层的struct socket状态设置成功
 		skynet.error("connect from " .. addr .. " " .. id)
 		socket.start(id)
 		local ok, slave, slave_addr = pcall(handshake, id)
@@ -122,4 +121,5 @@ skynet.start(function()
 			socket.close(id)
 		end
 	end)
+    skynet.error("master listen socket end-------" .. tostring(master_addr))
 end)

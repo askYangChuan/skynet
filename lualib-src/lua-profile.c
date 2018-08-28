@@ -116,7 +116,7 @@ lstop(lua_State *L) {
 static int
 timing_resume(lua_State *L) {
 	lua_pushvalue(L, -1);
-	lua_rawget(L, lua_upvalueindex(2));
+	lua_rawget(L, lua_upvalueindex(2));		/* 将第二个上值total time表的 total[co]入栈  */
 	if (lua_isnil(L, -1)) {		// check total time
 		lua_pop(L,2);	// pop from coroutine
 	} else {
@@ -126,17 +126,17 @@ timing_resume(lua_State *L) {
 		fprintf(stderr, "PROFILE [%p] resume %lf\n", lua_tothread(L, -1), ti);
 #endif
 		lua_pushnumber(L, ti);
-		lua_rawset(L, lua_upvalueindex(1));	// set start time
+		lua_rawset(L, lua_upvalueindex(1));	// set start time	/* start time[co] = ti */
 	}
 
 	lua_CFunction co_resume = lua_tocfunction(L, lua_upvalueindex(3));
-
-	return co_resume(L);
+	
+	return co_resume(L);	/* 3rd/lua 下面的resume函数，具体实现就不关心了 */
 }
 
 static int
 lresume(lua_State *L) {
-	lua_pushvalue(L,1);
+	lua_pushvalue(L,1);	/* traceback是虚拟机L的栈第一个索引，这里是lua调用c，所以他的栈只能访问到传给他的参数，所以索引1是co，co被压入栈顶 */
 	
 	return timing_resume(L);
 }
@@ -152,9 +152,9 @@ lresume_co(lua_State *L) {
 static int
 timing_yield(lua_State *L) {
 #ifdef DEBUG_LOG
-	lua_State *from = lua_tothread(L, -1);
+	lua_State *from = lua_tothread(L, -1);		//取出一个线程
 #endif
-	lua_pushvalue(L, -1);
+	lua_pushvalue(L, -1);	//将栈顶的线程拷贝一份压栈
 	lua_rawget(L, lua_upvalueindex(2));	// check total time
 	if (lua_isnil(L, -1)) {
 		lua_pop(L,2);
@@ -205,46 +205,46 @@ luaopen_skynet_profile(lua_State *L) {
 	luaL_Reg l[] = {
 		{ "start", lstart },
 		{ "stop", lstop },
-		{ "resume", lresume },
-		{ "yield", lyield },
-		{ "resume_co", lresume_co },
-		{ "yield_co", lyield_co },
+		{ "resume", lresume },	/* 这个函数的第三个上值不是nil，被赋值为coroutine.resume */
+		{ "yield", lyield },	/* 这个函数的第三个上值不是nil，被赋值为coroutine.yield */
+		{ "resume_co", lresume_co },	/* 这个函数的第三个上值不是nil，被赋值为coroutine.resume */
+		{ "yield_co", lyield_co },		/* 这个函数的第三个上值不是nil，被赋值为coroutine.yield */
 		{ NULL, NULL },
 	};
-	luaL_newlibtable(L,l);
-	lua_newtable(L);	// table thread->start time
+	luaL_newlibtable(L,l);		/* 开辟l大小的数据栈空间 */
+	lua_newtable(L);	// table thread->start time		/* 创建2个空表 */
 	lua_newtable(L);	// table thread->total time
 
-	lua_newtable(L);	// weak table
-	lua_pushliteral(L, "kv");
-	lua_setfield(L, -2, "__mode");
+	lua_newtable(L);	// weak table	/* 第三个空表 */
+	lua_pushliteral(L, "kv");		/* kv 入栈 */
+	lua_setfield(L, -2, "__mode");	/* 设置__mode = {"kv"}，第三个表就是弱引用表.kv出栈 */
 
-	lua_pushvalue(L, -1);
-	lua_setmetatable(L, -3); 
+	lua_pushvalue(L, -1);		/* 复制week table并入栈 */
+	lua_setmetatable(L, -3); 	/* 设置栈顶的2个week table为前面2个空表的原表，并出栈 */
 	lua_setmetatable(L, -3);
 
 	lua_pushnil(L);	// cfunction (coroutine.resume or coroutine.yield)
-	luaL_setfuncs(L,l,3);
+	luaL_setfuncs(L,l,3);	/* 上面设置了一个nil值，这里就将前面2个空表+nil值设置为所有函数的上值了,并且3个值都弹出栈 */
 
-	int libtable = lua_gettop(L);
+	int libtable = lua_gettop(L);	/* 获取libtable的索引 */
 
-	lua_getglobal(L, "coroutine");
-	lua_getfield(L, -1, "resume");
+	lua_getglobal(L, "coroutine");	/* 全局变量table coroutine入栈 */
+	lua_getfield(L, -1, "resume");	/* 将coroutine.resume 入栈 */
 
 	lua_CFunction co_resume = lua_tocfunction(L, -1);
 	if (co_resume == NULL)
 		return luaL_error(L, "Can't get coroutine.resume");
-	lua_pop(L,1);
+	lua_pop(L,1);	/* coroutine.resume 出栈 */
 
-	lua_getfield(L, libtable, "resume");
+	lua_getfield(L, libtable, "resume");	/* 将上面luaL_Reg l 的resume对应的lresume入栈 */
 	lua_pushcfunction(L, co_resume);
-	lua_setupvalue(L, -2, 3);
+	lua_setupvalue(L, -2, 3);			/* 给resume(lresume)的第三个上值设置为coroutine.resume */
 	lua_pop(L,1);
 
 	lua_getfield(L, libtable, "resume_co");
 	lua_pushcfunction(L, co_resume);
-	lua_setupvalue(L, -2, 3);
-	lua_pop(L,1);
+	lua_setupvalue(L, -2, 3);			/* 给resume_co(lresume_co)的第三个上值设置为coroutine.resume */
+	lua_pop(L,1);		
 
 	lua_getfield(L, -1, "yield");
 
@@ -255,15 +255,15 @@ luaopen_skynet_profile(lua_State *L) {
 
 	lua_getfield(L, libtable, "yield");
 	lua_pushcfunction(L, co_yield);
-	lua_setupvalue(L, -2, 3);
+	lua_setupvalue(L, -2, 3);		/* 给yield(lyield)的第三个上值设置为coroutine.yield */
 	lua_pop(L,1);
 
 	lua_getfield(L, libtable, "yield_co");
 	lua_pushcfunction(L, co_yield);
-	lua_setupvalue(L, -2, 3);
+	lua_setupvalue(L, -2, 3);		/* 给yield_co(lyield_co)的第三个上值设置为coroutine.yield */
 	lua_pop(L,1);
 
-	lua_settop(L, libtable);
+	lua_settop(L, libtable);		/* 清除libtable上面的栈空间，将libtable设置为栈顶 */
 
 	return 1;
 }

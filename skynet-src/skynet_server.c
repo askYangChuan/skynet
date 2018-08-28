@@ -42,21 +42,21 @@
 
 struct skynet_context {
 	void * instance;
-	struct skynet_module * mod;
-	void * cb_ud;
-	skynet_cb cb;
+	struct skynet_module * mod;		/* 服务具体是哪个模块的 */
+	void * cb_ud;			/* 用户自定义数据，如Logger，就是 struct logger *inst */
+	skynet_cb cb;			/* 回调函数 */
 	struct message_queue *queue;
 	FILE * logfile;
 	uint64_t cpu_cost;	// in microsec
 	uint64_t cpu_start;	// in microsec
-	char result[32];
-	uint32_t handle;
+	char result[32];	/* 服务的名字，如logger */
+	uint32_t handle;	/* 存在H里面的索引hash */
 	int session_id;
-	int ref;
+	int ref;			/* 引用计数 */
 	int message_count;
 	bool init;
 	bool endless;
-	bool profile;
+	bool profile;		/* cpu计数 */
 
 	CHECKCALLING_DECL
 };
@@ -66,7 +66,7 @@ struct skynet_node {
 	int init;
 	uint32_t monitor_exit;
 	pthread_key_t handle_key;
-	bool profile;	// default is off
+	bool profile;	// default is off	/* 统计每个节点占用多少CPU时间的开关 */
 };
 
 static struct skynet_node G_NODE;
@@ -123,13 +123,13 @@ drop_message(struct skynet_message *msg, void *ud) {
 }
 
 struct skynet_context * 
-skynet_context_new(const char * name, const char *param) {
+skynet_context_new(const char * name, const char *param) { /* name就是想要执行的动态库，一般是snlua,param是传递给动态库的参数，比如launcher */
 	struct skynet_module * mod = skynet_module_query(name);
 
 	if (mod == NULL)
 		return NULL;
 
-	void *inst = skynet_module_instance_create(mod);
+	void *inst = skynet_module_instance_create(mod);	/* 执行库里面的_create函数 */
 	if (inst == NULL)
 		return NULL;
 	struct skynet_context * ctx = skynet_malloc(sizeof(*ctx));
@@ -158,14 +158,14 @@ skynet_context_new(const char * name, const char *param) {
 	context_inc();
 
 	CHECKCALLING_BEGIN(ctx)
-	int r = skynet_module_instance_init(mod, inst, ctx, param);
+	int r = skynet_module_instance_init(mod, inst, ctx, param);	/* 执行库里面的_init函数,如snlua就会给自己的队列发送一个消息，等待其他线程取下来执行 */
 	CHECKCALLING_END(ctx)
 	if (r == 0) {
-		struct skynet_context * ret = skynet_context_release(ctx);
+		struct skynet_context * ret = skynet_context_release(ctx);	/* 之前初始化时ref为2，多半只是为了减1 */
 		if (ret) {
 			ctx->init = true;
 		}
-		skynet_globalmq_push(queue);
+		skynet_globalmq_push(queue);		/* 如果是snlua,在init时他给自己队列发送了一个消息，这个时候才挂到global_queue里面，才会被其他线程获取 */
 		if (ret) {
 			skynet_error(ret, "LAUNCH %s %s", name, param ? param : "");
 		}
@@ -176,7 +176,7 @@ skynet_context_new(const char * name, const char *param) {
 		skynet_context_release(ctx);
 		skynet_handle_retire(handle);
 		struct drop_t d = { handle };
-		skynet_mq_release(queue, drop_message, &d);
+		skynet_mq_release(queue, drop_message, &d);	/* 删除队列 */
 		return NULL;
 	}
 }
@@ -210,7 +210,7 @@ delete_context(struct skynet_context *ctx) {
 	if (ctx->logfile) {
 		fclose(ctx->logfile);
 	}
-	skynet_module_instance_release(ctx->mod, ctx->instance);
+	skynet_module_instance_release(ctx->mod, ctx->instance);	/* _release */
 	skynet_mq_mark_release(ctx->queue);
 	CHECKCALLING_DESTROY(ctx)
 	skynet_free(ctx);
@@ -258,7 +258,7 @@ skynet_isremote(struct skynet_context * ctx, uint32_t handle, int * harbor) {
 }
 
 static void
-dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
+dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {	/* 真正处理各个模块注册的回调函数 */
 	assert(ctx->init);
 	CHECKCALLING_BEGIN(ctx)
 	pthread_setspecific(G_NODE.handle_key, (void *)(uintptr_t)(ctx->handle));
@@ -277,7 +277,7 @@ dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 	} else {
 		reserve_msg = ctx->cb(ctx, ctx->cb_ud, type, msg->session, msg->source, msg->data, sz);
 	}
-	if (!reserve_msg) {
+	if (!reserve_msg) {	/* reserve_msg 为1 msg->data如何删除 */
 		skynet_free(msg->data);
 	}
 	CHECKCALLING_END(ctx)
@@ -303,7 +303,7 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 
 	uint32_t handle = skynet_mq_handle(q);
 
-	struct skynet_context * ctx = skynet_handle_grab(handle);
+	struct skynet_context * ctx = skynet_handle_grab(handle);	/* 这里如果ctx已经被释放了，就在这儿删除了这个队列 */
 	if (ctx == NULL) {
 		struct drop_t d = { handle };
 		skynet_mq_release(q, drop_message, &d);
@@ -314,7 +314,7 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 	struct skynet_message msg;
 
 	for (i=0;i<n;i++) {
-		if (skynet_mq_pop(q,&msg)) {
+		if (skynet_mq_pop(q,&msg)) {	/* 队列为空，将global设置为0，并且不加入到总队列，等需要向ctx发送数据时自己加入进去 */
 			skynet_context_release(ctx);
 			return skynet_globalmq_pop();
 		} else if (i==0 && weight >= 0) {
@@ -325,8 +325,8 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 		if (overload) {
 			skynet_error(ctx, "May overload, message queue length = %d", overload);
 		}
+		skynet_monitor_trigger(sm, msg.source , handle);	/* version会变化，用来检查下thread会不会被某个任务卡死了， */
 
-		skynet_monitor_trigger(sm, msg.source , handle);
 
 		if (ctx->cb == NULL) {
 			skynet_free(msg.data);
@@ -405,7 +405,7 @@ cmd_timeout(struct skynet_context * context, const char * param) {
 }
 
 static const char *
-cmd_reg(struct skynet_context * context, const char * param) {
+cmd_reg(struct skynet_context * context, const char * param) {	/* 注册到name服务中 */
 	if (param == NULL || param[0] == '\0') {
 		sprintf(context->result, ":%x", context->handle);
 		return context->result;
@@ -434,7 +434,7 @@ cmd_name(struct skynet_context * context, const char * param) {
 	int size = strlen(param);
 	char name[size+1];
 	char handle[size+1];
-	sscanf(param,"%s %s",name,handle);
+	sscanf(param,"%s %s",name,handle);	//handle的格式应该是:01000003
 	if (handle[0] != ':') {
 		return NULL;
 	}
@@ -443,7 +443,7 @@ cmd_name(struct skynet_context * context, const char * param) {
 		return NULL;
 	}
 	if (name[0] == '.') {
-		return skynet_handle_namehandle(handle_id, name + 1);
+		return skynet_handle_namehandle(handle_id, name + 1);	//给handle注册了一个name的名字
 	} else {
 		skynet_error(context, "Can't set global name %s in C", name);
 	}
@@ -479,6 +479,7 @@ cmd_kill(struct skynet_context * context, const char * param) {
 	return NULL;
 }
 
+/* bootstrap.lua启动skynet.launch的时候用的ctx是bootstrap.lua自己的ctx，这里又使用snlua.so来创建新的一个虚拟机ctx来跑 */
 static const char *
 cmd_launch(struct skynet_context * context, const char * param) {
 	size_t sz = strlen(param);
@@ -487,7 +488,7 @@ cmd_launch(struct skynet_context * context, const char * param) {
 	char * args = tmp;
 	char * mod = strsep(&args, " \t\r\n");
 	args = strsep(&args, "\r\n");
-	struct skynet_context * inst = skynet_context_new(mod,args);
+	struct skynet_context * inst = skynet_context_new(mod,args);	/* 第一次的args是launcher.lua(snlua先启动loader.lua，loader再启动launcher.lua) */
 	if (inst == NULL) {
 		return NULL;
 	} else {
@@ -679,7 +680,7 @@ static void
 _filter_args(struct skynet_context * context, int type, int *session, void ** data, size_t * sz) {
 	int needcopy = !(type & PTYPE_TAG_DONTCOPY);
 	int allocsession = type & PTYPE_TAG_ALLOCSESSION;
-	type &= 0xff;
+	type &= 0xff;	/* 这里将上面的dontcopy和allocession给去掉了 */
 
 	if (allocsession) {
 		assert(*session == 0);

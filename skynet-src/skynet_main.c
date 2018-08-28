@@ -51,8 +51,8 @@ optstring(const char *key,const char * opt) {
 
 static void
 _init_env(lua_State *L) {
-	lua_pushnil(L);  /* first key */
-	while (lua_next(L, -2) != 0) {
+	lua_pushnil(L);  /* first key,上面执行的lua结果返回了个result表在-1处，将这个nil入栈之后，就在-2处了 */
+	while (lua_next(L, -2) != 0) {	/* 将上面的nil弹出，然后栈顶就从result中取出2个值，就是-3为result表，-2为key,-1为value */
 		int keyt = lua_type(L, -2);
 		if (keyt != LUA_TSTRING) {
 			fprintf(stderr, "Invalid config table\n");
@@ -137,17 +137,17 @@ main(int argc, char *argv[]) {
 	struct lua_State *L = luaL_newstate();
 	luaL_openlibs(L);	// link lua lib
 
-	int err =  luaL_loadbufferx(L, load_config, strlen(load_config), "=[skynet config]", "t");
+	int err =  luaL_loadbufferx(L, load_config, strlen(load_config), "=[skynet config]", "t");	/* 导入上面的lua语句，获取配置文件，上面的脚本终于看懂了，在load_config.lua里面有记录 */
 	assert(err == LUA_OK);
-	lua_pushstring(L, config_file);
+	lua_pushstring(L, config_file);	/* 将配置参数放到虚拟栈的栈顶 */
 
-	err = lua_pcall(L, 1, 1, 0);
+	err = lua_pcall(L, 1, 1, 0);	/* 第一个1表示传递了1个参数，第二个1表示希望返回1个结果，0表示错误处理函数在栈内的索引 */
 	if (err) {
 		fprintf(stderr,"%s\n",lua_tostring(L,-1));
 		lua_close(L);
 		return 1;
 	}
-	_init_env(L);
+	_init_env(L);	/* 将config和config.path读取到的配置存入全局变量E的虚拟机中 */
 
 	config.thread =  optint("thread",8);
 	config.module_path = optstring("cpath","./cservice/?.so");

@@ -36,8 +36,8 @@ _cb(struct skynet_context * context, void * ud, int type, int session, uint32_t 
 	int r;
 	int top = lua_gettop(L);
 	if (top == 0) {
-		lua_pushcfunction(L, traceback);
-		lua_rawgetp(L, LUA_REGISTRYINDEX, _cb);
+		lua_pushcfunction(L, traceback);		/* 每个被snlua启动起来的lua脚本，索引1都是traceback */
+		lua_rawgetp(L, LUA_REGISTRYINDEX, _cb);	/* skynet.start的func就是skynet.dispatch_message */
 	} else {
 		assert(top == 2);
 	}
@@ -49,7 +49,7 @@ _cb(struct skynet_context * context, void * ud, int type, int session, uint32_t 
 	lua_pushinteger(L, session);
 	lua_pushinteger(L, source);
 
-	r = lua_pcall(L, 5, 0 , trace);
+	r = lua_pcall(L, 5, 0 , trace);	/* 这个函数执行完了过后，栈里面还是有2个值，一个traceback，一个func */
 
 	if (r == LUA_OK) {
 		return 0;
@@ -70,7 +70,7 @@ _cb(struct skynet_context * context, void * ud, int type, int session, uint32_t 
 		break;
 	};
 
-	lua_pop(L,1);
+	lua_pop(L,1);	/* 将错误出栈 */
 
 	return 0;
 }
@@ -86,11 +86,11 @@ static int
 lcallback(lua_State *L) {
 	struct skynet_context * context = lua_touserdata(L, lua_upvalueindex(1));
 	int forward = lua_toboolean(L, 2);
-	luaL_checktype(L,1,LUA_TFUNCTION);
-	lua_settop(L,1);
-	lua_rawsetp(L, LUA_REGISTRYINDEX, _cb);
+	luaL_checktype(L,1,LUA_TFUNCTION);		/* 检查第一个参数是否为func */
+	lua_settop(L,1);						/* 将第一个参数设置为栈顶 */
+	lua_rawsetp(L, LUA_REGISTRYINDEX, _cb);	/* 设置伪索引表的 t[_cb] = func，skynet.start的func就是skynet.dispatch_message */
 
-	lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+	lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);	/* 将LUA_REGISTRYINDEX[LUA_RIDX_MAINTHREAD] 值压入栈,这是状态机的主线程 */
 	lua_State *gL = lua_tothread(L,-1);
 
 	if (forward) {
@@ -102,10 +102,14 @@ lcallback(lua_State *L) {
 	return 0;
 }
 
+/* 在我还在看bootstrap.lua时候调用的ctx还是snlua创建的ctx 
+	snlua启动后，调用了loader.lua，然后loader.lua调用bootsrtap.lua，所以这里的ctx都是snlua时候创建的
+*/
+
 static int
 lcommand(lua_State *L) {
-	struct skynet_context * context = lua_touserdata(L, lua_upvalueindex(1));
-	const char * cmd = luaL_checkstring(L,1);
+	struct skynet_context * context = lua_touserdata(L, lua_upvalueindex(1));	
+	const char * cmd = luaL_checkstring(L,1);	/* 检查函数的第一个参数是否是字符串并返回字符串，这里应该是LAUNCH，第二个参数是'snlua launcher' */
 	const char * result;
 	const char * parm = NULL;
 	if (lua_gettop(L) == 2) {
@@ -177,7 +181,7 @@ get_dest_string(lua_State *L, int index) {
 static int
 send_message(lua_State *L, int source, int idx_type) {
 	struct skynet_context * context = lua_touserdata(L, lua_upvalueindex(1));
-	uint32_t dest = (uint32_t)lua_tointeger(L, 1);
+	uint32_t dest = (uint32_t)lua_tointeger(L, 1);			/* 第一个参数可能是handle也可能是addr，需要判断一下 */
 	const char * dest_string = NULL;
 	if (dest == 0) {
 		if (lua_type(L,1) == LUA_TNUMBER) {
@@ -186,15 +190,15 @@ send_message(lua_State *L, int source, int idx_type) {
 		dest_string = get_dest_string(L, 1);
 	}
 
-	int type = luaL_checkinteger(L, idx_type+0);
+	int type = luaL_checkinteger(L, idx_type+0);		/* 第二个参数是消息类型，如PTYPE_LUA */
 	int session = 0;
-	if (lua_isnil(L,idx_type+1)) {
+	if (lua_isnil(L,idx_type+1)) {		/* 查看第三个参数是否是nil，为nil需要自己分配session */
 		type |= PTYPE_TAG_ALLOCSESSION;
 	} else {
 		session = luaL_checkinteger(L,idx_type+1);
 	}
 
-	int mtype = lua_type(L,idx_type+2);
+	int mtype = lua_type(L,idx_type+2);	/* 第四个参数，被p.pick的参数集合，可能是被skynet.pick打包的用户数据 */
 	switch (mtype) {
 	case LUA_TSTRING: {
 		size_t len = 0;
@@ -203,7 +207,7 @@ send_message(lua_State *L, int source, int idx_type) {
 			msg = NULL;
 		}
 		if (dest_string) {
-			session = skynet_sendname(context, source, dest_string, type, session , msg, len);
+			session = skynet_sendname(context, source, dest_string, type, session , msg, len);	/* 这个session，是本服务器自己的session */
 		} else {
 			session = skynet_send(context, source, dest, type, session , msg, len);
 		}
@@ -348,7 +352,7 @@ lnow(lua_State *L) {
 
 LUAMOD_API int
 luaopen_skynet_core(lua_State *L) {
-	luaL_checkversion(L);
+	luaL_checkversion(L);	/* 检查调用它的内核是否是创建这个 Lua 状态机的内核。 以及调用它的代码是否使用了相同的 Lua 版本。 同时也检查调用它的内核与创建该 Lua 状态机的内核 是否使用了同一片地址空间 */
 
 	luaL_Reg l[] = {
 		{ "send" , lsend },
@@ -368,7 +372,7 @@ luaopen_skynet_core(lua_State *L) {
 		{ NULL, NULL },
 	};
 
-	luaL_newlibtable(L, l);
+	luaL_newlibtable(L, l);		 /* 创建一个表，可以容纳l数组大小，这里没有使用luaL_newlib */
 
 	lua_getfield(L, LUA_REGISTRYINDEX, "skynet_context");
 	struct skynet_context *ctx = lua_touserdata(L,-1);
@@ -376,7 +380,7 @@ luaopen_skynet_core(lua_State *L) {
 		return luaL_error(L, "Init skynet context first");
 	}
 
-	luaL_setfuncs(L,l,1);
+	luaL_setfuncs(L,l,1);		/* 这个函数里面做了闭包操作，创建的函数可以共享同一个上值skynet_context。其实意思就是将ctx作为上值压入了每个函数里面（闭包） */
 
 	return 1;
 }

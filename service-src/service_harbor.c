@@ -33,7 +33,7 @@
  */
 struct remote_message_header {
 	uint32_t source;
-	uint32_t destination;
+	uint32_t destination;	/* 远程发送的数据dest的高1字节是type */
 	uint32_t session;
 };
 
@@ -69,7 +69,7 @@ struct hashmap {
 #define STATUS_DOWN 4
 
 struct slave {
-	int fd;
+	int fd;		/* socket 的索引id */
 	struct harbor_msg_queue *queue;
 	int status;
 	int length;
@@ -80,7 +80,7 @@ struct slave {
 
 struct harbor {
 	struct skynet_context *ctx;
-	int id;
+	int id;		/* harbor_id 编号 */
 	uint32_t slave;
 	struct hashmap * map;
 	struct slave s[REMOTE_MAX];
@@ -325,6 +325,7 @@ forward_local_messsage(struct harbor *h, void *msg, int sz) {
 	}
 }
 
+/* 消息格式:   报文长度(4) + 报文内容+cookie(12)          */
 static void
 send_remote(struct skynet_context * ctx, int fd, const char * buffer, size_t sz, struct remote_message_header * cookie) {
 	size_t sz_header = sz+sizeof(*cookie);
@@ -447,7 +448,7 @@ push_socket_data(struct harbor *h, const struct skynet_socket_message * message)
 			}
 			// go though
 		}
-		case STATUS_HEADER: {
+		case STATUS_HEADER: {	/* 接收四字节头部 */
 			// big endian 4 bytes length, the first one must be 0.
 			int need = 4 - s->read;
 			if (size < need) {

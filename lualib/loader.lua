@@ -3,7 +3,7 @@ for word in string.gmatch(..., "%S+") do
 	table.insert(args, word)
 end
 
-SERVICE_NAME = args[1]
+SERVICE_NAME = args[1]          --args[1]一般就是skynet.launch填充的名字，当然第一个lua脚本args[1]是bootstrap，第二个就是launcher，用于找脚本名字的
 
 local main, pattern
 
@@ -44,5 +44,5 @@ if LUA_PRELOAD then
 	f(table.unpack(args))
 	LUA_PRELOAD = nil
 end
-
+local skynet = require "skynet.core"
 main(select(2, table.unpack(args)))

@@ -19,7 +19,7 @@
 #include <signal.h>
 
 struct monitor {
-	int count;
+	int count;		/* 8：线程个数 */
 	struct skynet_monitor ** m;
 	pthread_cond_t cond;
 	pthread_mutex_t mutex;
@@ -68,11 +68,11 @@ thread_socket(void *p) {
 		int r = skynet_socket_poll();
 		if (r==0)
 			break;
-		if (r<0) {
+		if (r<0) {	/* 走到这说明没得报文，不用唤醒工作线程 */
 			CHECK_ABORT
 			continue;
 		}
-		wakeup(m,0);
+		wakeup(m,0);	/* 里面返回1说明需要唤醒工作线程 */
 	}
 	return NULL;
 }
@@ -90,6 +90,7 @@ free_monitor(struct monitor *m) {
 	skynet_free(m);
 }
 
+/* 用户检查某个线程是不是处理某个任务时间太长，在一个线程处理一个任务时会将version+1,处理完成后清空数据，这样等待5秒后如果还在处理，那就需要优化了 */
 static void *
 thread_monitor(void *p) {
 	struct monitor * m = p;
@@ -235,7 +236,7 @@ bootstrap(struct skynet_context * logger, const char * cmdline) {
 	char name[sz+1];
 	char args[sz+1];
 	sscanf(cmdline, "%s %s", name, args);
-	struct skynet_context *ctx = skynet_context_new(name, args);
+	struct skynet_context *ctx = skynet_context_new(name, args);	/* snlua.so */
 	if (ctx == NULL) {
 		skynet_error(NULL, "Bootstrap error : %s\n", cmdline);
 		skynet_context_dispatchall(logger);
@@ -257,15 +258,15 @@ skynet_start(struct skynet_config * config) {
 			exit(1);
 		}
 	}
-	skynet_harbor_init(config->harbor);
-	skynet_handle_init(config->harbor);
-	skynet_mq_init();
-	skynet_module_init(config->module_path);
-	skynet_timer_init();
+	skynet_harbor_init(config->harbor);	 /* 进程集群的编号,HARBOR */
+	skynet_handle_init(config->harbor);		/* 初始化H,handle的全局管理变量 */
+	skynet_mq_init();					/* 总队列,Q */
+	skynet_module_init(config->module_path);	/* C库所在路径,M */
+	skynet_timer_init();				/* 定时器TI */
 	skynet_socket_init();
 	skynet_profile_enable(config->profile);
 
-	struct skynet_context *ctx = skynet_context_new(config->logservice, config->logger);
+	struct skynet_context *ctx = skynet_context_new(config->logservice, config->logger);	/* logger.so */
 	if (ctx == NULL) {
 		fprintf(stderr, "Can't launch %s service\n", config->logservice);
 		exit(1);
